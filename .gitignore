@@ -1,0 +1,11 @@
+# rust
+/target
+
+# node / svelte
+node_modules/
+.svelte-kit/
+build/
+.vite/
+
+# deno
+.deno/
