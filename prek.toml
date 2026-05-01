@@ -1,0 +1,21 @@
+# Configuration for `prek` (https://prek.j178.dev/).
+# Run `prek install` once per clone to wire up the git hooks.
+#:schema https://www.schemastore.org/prek.json
+
+[[repos]]
+repo = "builtin"
+hooks = [
+    { id = "trailing-whitespace" },
+    { id = "end-of-file-fixer" },
+    { id = "check-added-large-files" },
+    { id = "check-yaml" },
+    { id = "check-toml" },
+]
+
+[[repos]]
+repo = "local"
+hooks = [
+    { id = "cargo-fmt", name = "cargo fmt", entry = "cargo fmt --all -- --check", language = "system", types = ["rust"], pass_filenames = false },
+    { id = "cargo-clippy", name = "cargo clippy", entry = "cargo clippy -p sppl --all-features --all-targets -- -D warnings", language = "system", types = ["rust"], pass_filenames = false },
+    { id = "cargo-test", name = "cargo test", entry = "cargo test -p sppl --all-features", language = "system", types = ["rust"], pass_filenames = false },
+]

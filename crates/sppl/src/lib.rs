@@ -25,6 +25,8 @@
 //!   binary with `Content-Encoding: gzip` (no per-request CPU cost),
 //! - clients that don't are served decompressed bytes via [`flate2`].
 
+#![allow(clippy::needless_doctest_main)]
+
 use std::borrow::Cow;
 
 pub use rust_embed::{EmbeddedFile, RustEmbed};
