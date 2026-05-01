@@ -1,7 +1,8 @@
 [package]
 name = "sppl"
-version = "0.1.0"
+version.workspace = true
 description = "Embed static Svelte (and other static) apps into Rust servers."
+readme = "../../README.md"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
