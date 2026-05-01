@@ -1,7 +1,6 @@
 # sppl
 
-**sppl** _(supple)_ — embed static Svelte apps directly into your Rust
-binary.
+**sppl** _(supple)_ — embed static Svelte apps into your Rust binary.
 
 A Svelte/SvelteKit app, built with `adapter-static`, is just a tree of
 HTML/CSS/JS files. `sppl` bakes that tree into your Rust binary at compile
@@ -38,7 +37,7 @@ examples/server/     # axum server that embeds the demo
 ```toml
 # Cargo.toml
 [dependencies]
-sppl  = "0.1"
+sppl  = "0.0.1"
 axum  = "0.7"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
@@ -83,6 +82,17 @@ Set `SPPL_SKIP_SVELTE_BUILD=1` to skip the build-script step (useful in CI
 when the build is produced upstream).
 
 Then open <http://127.0.0.1:3000>.
+
+## Testing
+
+```bash
+cargo test -p sppl
+```
+
+Covers `accepts_gzip` header parsing and the `resolve` lookup rules
+(exact path, `.html` extension, trailing-slash `index.html`, SPA fallback,
+and `.gz` preference). Fixture files live under
+`crates/sppl/tests/fixtures/static/`.
 
 ## Requirements
 

@@ -76,3 +76,70 @@ fn accepts_gzip(headers: &HeaderMap) -> bool {
         token.eq_ignore_ascii_case("gzip")
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn h(value: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ACCEPT_ENCODING, value.parse().unwrap());
+        headers
+    }
+
+    #[test]
+    fn missing_header_is_false() {
+        assert!(!accepts_gzip(&HeaderMap::new()));
+    }
+
+    #[test]
+    fn empty_header_is_false() {
+        assert!(!accepts_gzip(&h("")));
+    }
+
+    #[test]
+    fn plain_gzip_is_true() {
+        assert!(accepts_gzip(&h("gzip")));
+    }
+
+    #[test]
+    fn case_insensitive() {
+        assert!(accepts_gzip(&h("GZIP")));
+        assert!(accepts_gzip(&h("Gzip")));
+    }
+
+    #[test]
+    fn finds_gzip_anywhere_in_list() {
+        assert!(accepts_gzip(&h("gzip, deflate")));
+        assert!(accepts_gzip(&h("deflate, gzip")));
+        assert!(accepts_gzip(&h("br, gzip, deflate")));
+    }
+
+    #[test]
+    fn ignores_q_parameter() {
+        assert!(accepts_gzip(&h("gzip;q=0.5")));
+        assert!(accepts_gzip(&h("gzip; q=0.8")));
+        assert!(accepts_gzip(&h("deflate, gzip;q=0.9, br")));
+    }
+
+    #[test]
+    fn surrounding_whitespace_ok() {
+        assert!(accepts_gzip(&h("  gzip  ")));
+        assert!(accepts_gzip(&h(" deflate ,  gzip ")));
+    }
+
+    #[test]
+    fn other_encodings_alone_are_false() {
+        assert!(!accepts_gzip(&h("deflate")));
+        assert!(!accepts_gzip(&h("br")));
+        assert!(!accepts_gzip(&h("identity")));
+        assert!(!accepts_gzip(&h("br, deflate, identity")));
+    }
+
+    #[test]
+    fn substring_match_is_not_enough() {
+        // "x-gzip" and "gzipped" are distinct tokens, not gzip.
+        assert!(!accepts_gzip(&h("x-gzip")));
+        assert!(!accepts_gzip(&h("gzipped")));
+    }
+}
