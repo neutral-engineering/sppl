@@ -1,14 +1,14 @@
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use axum::{
+    Router,
     extract::Request,
     http::header,
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
-    Router,
 };
 #[derive(sppl::RustEmbed)]
 #[folder = "$CARGO_MANIFEST_DIR/../app/build"]
@@ -39,11 +39,7 @@ fn record_in_bucket() {
     let tag = now << 32;
     loop {
         let cur = bucket.load(Ordering::Relaxed);
-        let new = if cur >> 32 == now {
-            cur + 1
-        } else {
-            tag | 1
-        };
+        let new = if cur >> 32 == now { cur + 1 } else { tag | 1 };
         if bucket
             .compare_exchange_weak(cur, new, Ordering::Relaxed, Ordering::Relaxed)
             .is_ok()
@@ -112,7 +108,9 @@ fn compute_inventory() -> String {
     let mut bytes_in_binary: u64 = 0;
     let mut uncompressed_bytes: u64 = 0;
     for name in App::iter() {
-        let Some(file) = App::get(&name) else { continue };
+        let Some(file) = App::get(&name) else {
+            continue;
+        };
         count += 1;
         bytes_in_binary += file.data.len() as u64;
         uncompressed_bytes += if name.ends_with(".gz") && file.data.len() >= 4 {

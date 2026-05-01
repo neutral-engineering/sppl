@@ -16,7 +16,10 @@ fn body(asset: sppl::Asset) -> String {
 fn root_serves_index_html_via_fallback() {
     let asset = sppl::resolve::<Fixture>("/").expect("root resolves");
     assert_eq!(asset.path, "index.html");
-    assert!(asset.gzipped, "index.html.gz fixture exists, should be preferred");
+    assert!(
+        asset.gzipped,
+        "index.html.gz fixture exists, should be preferred"
+    );
     assert_eq!(body(asset).trim(), "INDEX");
 }
 
@@ -30,7 +33,10 @@ fn empty_path_serves_index_html() {
 fn exact_path_match_wins() {
     let asset = sppl::resolve::<Fixture>("/assets/main.css").expect("css");
     assert_eq!(asset.path, "assets/main.css");
-    assert!(asset.gzipped, "main.css.gz fixture exists, should be preferred");
+    assert!(
+        asset.gzipped,
+        "main.css.gz fixture exists, should be preferred"
+    );
     assert_eq!(body(asset).trim(), "MAIN_CSS");
 }
 

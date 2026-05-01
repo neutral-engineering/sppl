@@ -17,14 +17,26 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-use flate2::write::GzEncoder;
 use flate2::Compression;
+use flate2::write::GzEncoder;
 
 /// File extensions whose contents typically compress well. Binary formats
 /// that are already compressed (PNG/JPEG/WOFF2/MP4/…) are skipped to avoid
 /// spending bytes for no gain.
 pub const DEFAULT_COMPRESSIBLE_EXTENSIONS: &[&str] = &[
-    "html", "htm", "css", "js", "mjs", "cjs", "json", "map", "svg", "wasm", "txt", "xml", "ico",
+    "html",
+    "htm",
+    "css",
+    "js",
+    "mjs",
+    "cjs",
+    "json",
+    "map",
+    "svg",
+    "wasm",
+    "txt",
+    "xml",
+    "ico",
     "webmanifest",
 ];
 

@@ -1,13 +1,13 @@
 //! Axum integration.
 
 use ::axum::{
-    body::Body,
-    http::{header, HeaderMap, StatusCode, Uri},
-    response::{IntoResponse, Response},
     Router,
+    body::Body,
+    http::{HeaderMap, StatusCode, Uri, header},
+    response::{IntoResponse, Response},
 };
 
-use crate::{resolve, RustEmbed};
+use crate::{RustEmbed, resolve};
 
 /// Build a [`Router`] that serves the embedded assets of `A` on every path,
 /// with SvelteKit `adapter-static` semantics, an SPA fallback to

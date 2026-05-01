@@ -16,9 +16,18 @@ fn main() {
 
     println!("cargo:rerun-if-env-changed=SPPL_SKIP_SVELTE_BUILD");
     println!("cargo:rerun-if-changed={}", app_dir.join("src").display());
-    println!("cargo:rerun-if-changed={}", app_dir.join("package.json").display());
-    println!("cargo:rerun-if-changed={}", app_dir.join("svelte.config.js").display());
-    println!("cargo:rerun-if-changed={}", app_dir.join("vite.config.ts").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        app_dir.join("package.json").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        app_dir.join("svelte.config.js").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        app_dir.join("vite.config.ts").display()
+    );
 
     if std::env::var_os("SPPL_SKIP_SVELTE_BUILD").is_none() {
         run_deno_build(&app_dir);
