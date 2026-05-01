@@ -1,0 +1,17 @@
+[package]
+name = "sppl-example-server"
+version = "0.0.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sppl = { path = "../../crates/sppl" }
+axum = "0.7"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[build-dependencies]
+# Used in `build.rs` to gzip the Svelte build output before it gets baked
+# into the binary. `default-features = false` skips axum / tower for the
+# build-script target.
+sppl = { path = "../../crates/sppl", default-features = false }

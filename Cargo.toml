@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/sppl",
+    "examples/server",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+authors = ["pgray@neutral.engineering"]
+license = "MIT"
+repository = "https://github.com/neutral-engineering/sppl"
