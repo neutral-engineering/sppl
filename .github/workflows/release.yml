@@ -41,6 +41,8 @@ jobs:
           # via `version.workspace = true`, and the example has its own
           # publish=false version that should not move with releases.
           sed -i "0,/^version = \".*\"/s//version = \"$VERSION\"/" Cargo.toml
+          # Keep the Usage snippet in the README in sync.
+          sed -i "s|^sppl  = \".*\"|sppl  = \"$VERSION\"|" README.md
 
       - name: Verify build
         run: cargo check -p sppl --all-features
@@ -49,7 +51,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml Cargo.lock
+          git add Cargo.toml Cargo.lock README.md
           git commit -m "${{ github.event.inputs.version }}"
           git push
 
