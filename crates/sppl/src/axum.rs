@@ -11,14 +11,25 @@ use ::axum::{
 use crate::{RustEmbed, resolve};
 
 /// Runtime knobs for [`router_with`].
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct RouterConfig {
-    /// When `true`, never gunzip on the fly — clients that don't advertise
-    /// `Accept-Encoding: gzip` get the gzipped bytes anyway, with
-    /// `Content-Encoding: gzip` set. Caps CPU cost under load (e.g. a script
-    /// hammering the server with `curl` and no `--compressed`). Practically
-    /// every modern client decompresses gzip transparently.
+    /// When `true` (the default), never gunzip on the fly — clients that
+    /// don't advertise `Accept-Encoding: gzip` get the gzipped bytes anyway,
+    /// with `Content-Encoding: gzip` set. Caps CPU cost under load (e.g. a
+    /// script hammering the server with `curl` and no `--compressed`).
+    /// Practically every modern client decompresses gzip transparently.
+    ///
+    /// Set to `false` to restore on-the-fly decompression for clients that
+    /// truly can't accept gzip.
     pub never_decompress: bool,
+}
+
+impl Default for RouterConfig {
+    fn default() -> Self {
+        Self {
+            never_decompress: true,
+        }
+    }
 }
 
 /// Build a [`Router`] that serves the embedded assets of `A` on every path,
@@ -192,10 +203,15 @@ mod tests {
         RouterConfig::default()
     }
 
-    fn never_decompress_cfg() -> RouterConfig {
+    fn allow_decompress_cfg() -> RouterConfig {
         RouterConfig {
-            never_decompress: true,
+            never_decompress: false,
         }
+    }
+
+    #[test]
+    fn default_has_never_decompress_set() {
+        assert!(default_cfg().never_decompress);
     }
 
     #[test]
@@ -209,7 +225,7 @@ mod tests {
             Encoding::RawAsIs
         );
         assert_eq!(
-            pick_encoding(false, false, &never_decompress_cfg()),
+            pick_encoding(false, false, &allow_decompress_cfg()),
             Encoding::RawAsIs
         );
     }
@@ -223,20 +239,22 @@ mod tests {
     }
 
     #[test]
-    fn default_config_decompresses_for_unaware_clients() {
+    fn default_config_sends_gzip_to_unaware_clients() {
+        // Default is `never_decompress: true` — we don't burn CPU
+        // decompressing for clients that didn't ask for gzip.
         assert_eq!(
             pick_encoding(true, false, &default_cfg()),
-            Encoding::Decompress
+            Encoding::GzippedAsIs
         );
     }
 
     #[test]
-    fn never_decompress_overrides_unaware_client() {
-        // Even though the client didn't send Accept-Encoding: gzip, we send
-        // gzipped bytes anyway — that's the whole point of the flag.
+    fn allow_decompress_falls_back_for_unaware_clients() {
+        // Opt-in to the slow path: clients that genuinely can't accept gzip
+        // get freshly decompressed bytes.
         assert_eq!(
-            pick_encoding(true, false, &never_decompress_cfg()),
-            Encoding::GzippedAsIs
+            pick_encoding(true, false, &allow_decompress_cfg()),
+            Encoding::Decompress
         );
     }
 }
