@@ -21,9 +21,12 @@
 //! [`build::gzip_assets`] from your `build.rs` to do it once at compile time;
 //! at request time `sppl::resolve` prefers the `.gz` variant if present.
 //!
-//! - clients that send `Accept-Encoding: gzip` get the raw bytes from the
-//!   binary with `Content-Encoding: gzip` (no per-request CPU cost),
-//! - clients that don't are served decompressed bytes via [`flate2`].
+//! By default the axum router sends the stored gzipped bytes to every
+//! client with `Content-Encoding: gzip`, regardless of `Accept-Encoding`.
+//! Modern clients decompress transparently and you cap the per-request CPU
+//! cost at zero. Flip [`axum::RouterConfig::never_decompress`] to `false`
+//! to restore on-the-fly decompression via [`flate2`] for clients that
+//! truly can't accept gzip.
 
 #![allow(clippy::needless_doctest_main)]
 

@@ -12,17 +12,23 @@ asset lookup) that already knows how to:
   routes,
 - fall back to `index.html` for client-side SPA routes,
 - store **one gzipped copy** of each compressible asset and serve it as-is
-  to clients that send `Accept-Encoding: gzip`, decompressing on the fly
-  for clients that don't,
+  with `Content-Encoding: gzip`, regardless of `Accept-Encoding` (modern
+  clients all decompress transparently); flip
+  [`RouterConfig::never_decompress`](crates/sppl/src/axum.rs) to `false`
+  to opt back into on-the-fly decompression for legacy clients,
 - ship as a single self-contained binary — no extra files to deploy.
 
 ## Compression
 
 Run [`sppl::build::gzip_assets`](crates/sppl/src/build.rs) from your
 `build.rs` once, after your Svelte build, and `sppl` takes care of the rest
-at request time. Because only the gzipped bytes live in the binary, you pay
-the storage cost once and the wire cost only when the client can't accept
-gzip (essentially never, in practice).
+at request time. Because only the gzipped bytes live in the binary, the
+default request path is zero-CPU: every response is the stored gzipped
+bytes, sent with `Content-Encoding: gzip`. Modern clients (browsers,
+`curl --compressed`, every common HTTP library) decompress transparently;
+the rare client that genuinely can't accept gzip can be served via
+`router_with(RouterConfig { never_decompress: false })`, which restores
+on-the-fly decompression with [`flate2`].
 
 ## Layout
 
