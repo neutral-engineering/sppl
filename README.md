@@ -18,7 +18,8 @@ asset lookup) that already knows how to:
   to opt back into on-the-fly decompression for legacy clients,
 - ship as a single self-contained binary — no extra files to deploy.
 
-<video src="https://raw.githubusercontent.com/neutral-engineering/sppl/main/examples/sppl.mp4" controls muted playsinline width="640"></video>
+https://github.com/user-attachments/assets/010351d4-e685-4aa2-9c9e-3d1294adb904
+
 
 ## Compression
 
