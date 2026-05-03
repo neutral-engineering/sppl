@@ -18,6 +18,8 @@ asset lookup) that already knows how to:
   to opt back into on-the-fly decompression for legacy clients,
 - ship as a single self-contained binary — no extra files to deploy.
 
+<video src="https://raw.githubusercontent.com/neutral-engineering/sppl/main/examples/sppl.mp4" controls muted playsinline width="640"></video>
+
 ## Compression
 
 Run [`sppl::build::gzip_assets`](crates/sppl/src/build.rs) from your
