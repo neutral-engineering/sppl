@@ -3,11 +3,34 @@
 use ::axum::{
     Router,
     body::Body,
+    extract::State,
     http::{HeaderMap, StatusCode, Uri, header},
     response::{IntoResponse, Response},
 };
 
 use crate::{RustEmbed, resolve};
+
+/// Runtime knobs for [`router_with`].
+#[derive(Clone, Debug)]
+pub struct RouterConfig {
+    /// When `true` (the default), never gunzip on the fly — clients that
+    /// don't advertise `Accept-Encoding: gzip` get the gzipped bytes anyway,
+    /// with `Content-Encoding: gzip` set. Caps CPU cost under load (e.g. a
+    /// script hammering the server with `curl` and no `--compressed`).
+    /// Practically every modern client decompresses gzip transparently.
+    ///
+    /// Set to `false` to restore on-the-fly decompression for clients that
+    /// truly can't accept gzip.
+    pub never_decompress: bool,
+}
+
+impl Default for RouterConfig {
+    fn default() -> Self {
+        Self {
+            never_decompress: true,
+        }
+    }
+}
 
 /// Build a [`Router`] that serves the embedded assets of `A` on every path,
 /// with SvelteKit `adapter-static` semantics, an SPA fallback to
@@ -23,29 +46,63 @@ pub fn router<A>() -> Router
 where
     A: RustEmbed + Send + Sync + 'static,
 {
-    Router::new().fallback(handler::<A>)
+    router_with::<A>(RouterConfig::default())
 }
 
-async fn handler<A: RustEmbed>(uri: Uri, headers: HeaderMap) -> Response {
+/// Like [`router`], but with overrides. Use this to opt out of on-the-fly
+/// decompression (see [`RouterConfig::never_decompress`]).
+pub fn router_with<A>(config: RouterConfig) -> Router
+where
+    A: RustEmbed + Send + Sync + 'static,
+{
+    Router::new().fallback(handler::<A>).with_state(config)
+}
+
+/// What we send back for a given (asset, request, config) triple.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Encoding {
+    /// Asset isn't gzipped — just send the raw bytes.
+    RawAsIs,
+    /// Asset is gzipped and the client either advertised gzip or we're
+    /// configured to never decompress; send the gzipped bytes with
+    /// `Content-Encoding: gzip`.
+    GzippedAsIs,
+    /// Asset is gzipped and the client doesn't advertise gzip and we are
+    /// allowed to decompress on the fly.
+    Decompress,
+}
+
+fn pick_encoding(asset_gzipped: bool, accepts_gzip: bool, config: &RouterConfig) -> Encoding {
+    if !asset_gzipped {
+        Encoding::RawAsIs
+    } else if accepts_gzip || config.never_decompress {
+        Encoding::GzippedAsIs
+    } else {
+        Encoding::Decompress
+    }
+}
+
+async fn handler<A: RustEmbed>(
+    State(config): State<RouterConfig>,
+    uri: Uri,
+    headers: HeaderMap,
+) -> Response {
     let Some(asset) = resolve::<A>(uri.path()) else {
         return (StatusCode::NOT_FOUND, "Not Found").into_response();
     };
 
     let mime = mime_guess::from_path(&asset.path).first_or_octet_stream();
-    let accepts_gzip = accepts_gzip(&headers);
+    let encoding = pick_encoding(asset.gzipped, accepts_gzip(&headers), &config);
 
-    if asset.gzipped && accepts_gzip {
-        return Response::builder()
+    match encoding {
+        Encoding::GzippedAsIs => Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, mime.as_ref())
             .header(header::CONTENT_ENCODING, "gzip")
             .header(header::VARY, "Accept-Encoding")
             .body(Body::from(asset.data.into_owned()))
-            .unwrap();
-    }
-
-    if asset.gzipped {
-        return match asset.decoded() {
+            .unwrap(),
+        Encoding::Decompress => match asset.decoded() {
             Ok(decoded) => Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, mime.as_ref())
@@ -53,14 +110,13 @@ async fn handler<A: RustEmbed>(uri: Uri, headers: HeaderMap) -> Response {
                 .body(Body::from(decoded.into_owned()))
                 .unwrap(),
             Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "decompression failed").into_response(),
-        };
+        },
+        Encoding::RawAsIs => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, mime.as_ref())
+            .body(Body::from(asset.data.into_owned()))
+            .unwrap(),
     }
-
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, mime.as_ref())
-        .body(Body::from(asset.data.into_owned()))
-        .unwrap()
 }
 
 fn accepts_gzip(headers: &HeaderMap) -> bool {
@@ -141,5 +197,64 @@ mod tests {
         // "x-gzip" and "gzipped" are distinct tokens, not gzip.
         assert!(!accepts_gzip(&h("x-gzip")));
         assert!(!accepts_gzip(&h("gzipped")));
+    }
+
+    fn default_cfg() -> RouterConfig {
+        RouterConfig::default()
+    }
+
+    fn allow_decompress_cfg() -> RouterConfig {
+        RouterConfig {
+            never_decompress: false,
+        }
+    }
+
+    #[test]
+    fn default_has_never_decompress_set() {
+        assert!(default_cfg().never_decompress);
+    }
+
+    #[test]
+    fn raw_assets_are_always_sent_as_is() {
+        assert_eq!(
+            pick_encoding(false, true, &default_cfg()),
+            Encoding::RawAsIs
+        );
+        assert_eq!(
+            pick_encoding(false, false, &default_cfg()),
+            Encoding::RawAsIs
+        );
+        assert_eq!(
+            pick_encoding(false, false, &allow_decompress_cfg()),
+            Encoding::RawAsIs
+        );
+    }
+
+    #[test]
+    fn gzipped_to_gzip_aware_client_is_sent_as_is() {
+        assert_eq!(
+            pick_encoding(true, true, &default_cfg()),
+            Encoding::GzippedAsIs
+        );
+    }
+
+    #[test]
+    fn default_config_sends_gzip_to_unaware_clients() {
+        // Default is `never_decompress: true` — we don't burn CPU
+        // decompressing for clients that didn't ask for gzip.
+        assert_eq!(
+            pick_encoding(true, false, &default_cfg()),
+            Encoding::GzippedAsIs
+        );
+    }
+
+    #[test]
+    fn allow_decompress_falls_back_for_unaware_clients() {
+        // Opt-in to the slow path: clients that genuinely can't accept gzip
+        // get freshly decompressed bytes.
+        assert_eq!(
+            pick_encoding(true, false, &allow_decompress_cfg()),
+            Encoding::Decompress
+        );
     }
 }
