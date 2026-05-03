@@ -1,5 +1,9 @@
 # sppl
 
+[![CI](https://github.com/neutral-engineering/sppl/actions/workflows/ci.yml/badge.svg)](https://github.com/neutral-engineering/sppl/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/sppl.svg)](https://crates.io/crates/sppl)
+[![docs.rs](https://img.shields.io/docsrs/sppl)](https://docs.rs/sppl)
+
 **sppl** _(supple)_ — embed static Svelte apps into your Rust binary.
 
 A Svelte/SvelteKit app, built with `adapter-static`, is just a tree of
