@@ -8,19 +8,23 @@ use ::axum::{
     response::{IntoResponse, Response},
 };
 
-use crate::{RustEmbed, resolve};
+use crate::{Encoding, RustEmbed, resolve_with};
 
 /// Runtime knobs for [`router_with`].
 #[derive(Clone, Debug)]
 pub struct RouterConfig {
-    /// When `true` (the default), never gunzip on the fly — clients that
-    /// don't advertise `Accept-Encoding: gzip` get the gzipped bytes anyway,
-    /// with `Content-Encoding: gzip` set. Caps CPU cost under load (e.g. a
-    /// script hammering the server with `curl` and no `--compressed`).
-    /// Practically every modern client decompresses gzip transparently.
+    /// When `true` (the default), never decompress a gzipped asset on the
+    /// fly: clients that don't advertise `Accept-Encoding: gzip` still get
+    /// the gzipped bytes, with `Content-Encoding: gzip` set. Caps CPU cost
+    /// under load. Practically every modern client decompresses gzip
+    /// transparently.
     ///
     /// Set to `false` to restore on-the-fly decompression for clients that
     /// truly can't accept gzip.
+    ///
+    /// Note: this only applies to gzip. Brotli is **never** sent to clients
+    /// that don't advertise `br` — they get the gzip or identity variant
+    /// instead (and if neither exists, the brotli variant decompressed).
     pub never_decompress: bool,
 }
 
@@ -34,7 +38,7 @@ impl Default for RouterConfig {
 
 /// Build a [`Router`] that serves the embedded assets of `A` on every path,
 /// with SvelteKit `adapter-static` semantics, an SPA fallback to
-/// `index.html`, and transparent gzip handling (see crate docs).
+/// `index.html`, and transparent gzip/brotli handling (see crate docs).
 ///
 /// Mount it at the root, or nest it under a prefix:
 ///
@@ -49,8 +53,9 @@ where
     router_with::<A>(RouterConfig::default())
 }
 
-/// Like [`router`], but with overrides. Use this to opt out of on-the-fly
-/// decompression (see [`RouterConfig::never_decompress`]).
+/// Like [`router`], but with overrides. Use this to opt out of the
+/// "send gzip even to clients that didn't ask for it" behavior (see
+/// [`RouterConfig::never_decompress`]).
 pub fn router_with<A>(config: RouterConfig) -> Router
 where
     A: RustEmbed + Send + Sync + 'static,
@@ -60,25 +65,73 @@ where
 
 /// What we send back for a given (asset, request, config) triple.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Encoding {
-    /// Asset isn't gzipped — just send the raw bytes.
-    RawAsIs,
-    /// Asset is gzipped and the client either advertised gzip or we're
-    /// configured to never decompress; send the gzipped bytes with
-    /// `Content-Encoding: gzip`.
-    GzippedAsIs,
-    /// Asset is gzipped and the client doesn't advertise gzip and we are
-    /// allowed to decompress on the fly.
+enum Disposition {
+    /// Send the stored bytes as-is with the appropriate `Content-Encoding`.
+    AsIs,
+    /// Decode the stored bytes and send the result as identity.
     Decompress,
 }
 
-fn pick_encoding(asset_gzipped: bool, accepts_gzip: bool, config: &RouterConfig) -> Encoding {
-    if !asset_gzipped {
-        Encoding::RawAsIs
-    } else if accepts_gzip || config.never_decompress {
-        Encoding::GzippedAsIs
-    } else {
-        Encoding::Decompress
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+struct AcceptedEncodings {
+    gzip: bool,
+    brotli: bool,
+}
+
+fn parse_accept_encoding(headers: &HeaderMap) -> AcceptedEncodings {
+    let Some(value) = headers.get(header::ACCEPT_ENCODING) else {
+        return AcceptedEncodings::default();
+    };
+    let Ok(s) = value.to_str() else {
+        return AcceptedEncodings::default();
+    };
+    let mut out = AcceptedEncodings::default();
+    for enc in s.split(',') {
+        let token = enc.split(';').next().unwrap_or("").trim();
+        if token.eq_ignore_ascii_case("gzip") {
+            out.gzip = true;
+        } else if token.eq_ignore_ascii_case("br") {
+            out.brotli = true;
+        }
+    }
+    out
+}
+
+/// Build the preference list passed to [`crate::resolve_with`] based on what
+/// the client accepts. We always include `Identity` last so the lookup
+/// succeeds even if only a raw file exists.
+fn encoding_prefs(accepts: AcceptedEncodings, config: &RouterConfig) -> Vec<Encoding> {
+    let mut prefs = Vec::with_capacity(3);
+    if accepts.brotli {
+        prefs.push(Encoding::Brotli);
+    }
+    if accepts.gzip || config.never_decompress {
+        // never_decompress: pick the gzipped bytes even if the client
+        // didn't ask, because modern clients decompress gzip transparently.
+        prefs.push(Encoding::Gzip);
+    }
+    prefs.push(Encoding::Identity);
+    prefs
+}
+
+fn pick_disposition(
+    asset_encoding: Encoding,
+    accepts: AcceptedEncodings,
+) -> Disposition {
+    match asset_encoding {
+        Encoding::Identity => Disposition::AsIs,
+        Encoding::Gzip => {
+            // Either the client advertised gzip, or we deliberately picked
+            // gzip via `never_decompress` knowing the client decompresses
+            // transparently. Either way: ship the bytes.
+            let _ = accepts;
+            Disposition::AsIs
+        }
+        Encoding::Brotli => {
+            // We only ever pick brotli when the client advertised `br`.
+            debug_assert!(accepts.brotli);
+            Disposition::AsIs
+        }
     }
 }
 
@@ -87,22 +140,36 @@ async fn handler<A: RustEmbed>(
     uri: Uri,
     headers: HeaderMap,
 ) -> Response {
-    let Some(asset) = resolve::<A>(uri.path()) else {
-        return (StatusCode::NOT_FOUND, "Not Found").into_response();
+    let accepts = parse_accept_encoding(&headers);
+    let prefs = encoding_prefs(accepts, &config);
+
+    let Some(asset) = resolve_with::<A>(uri.path(), &prefs) else {
+        // No variant matched the client's accepted encodings; try again
+        // with the default order so we can decompress on the fly.
+        let Some(asset) = resolve_with::<A>(uri.path(), crate::DEFAULT_ENCODINGS) else {
+            return (StatusCode::NOT_FOUND, "Not Found").into_response();
+        };
+        return serve(asset, Disposition::Decompress);
     };
 
-    let mime = mime_guess::from_path(&asset.path).first_or_octet_stream();
-    let encoding = pick_encoding(asset.gzipped, accepts_gzip(&headers), &config);
+    let disposition = pick_disposition(asset.encoding, accepts);
+    serve(asset, disposition)
+}
 
-    match encoding {
-        Encoding::GzippedAsIs => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, mime.as_ref())
-            .header(header::CONTENT_ENCODING, "gzip")
-            .header(header::VARY, "Accept-Encoding")
-            .body(Body::from(asset.data.into_owned()))
-            .unwrap(),
-        Encoding::Decompress => match asset.decoded() {
+fn serve(asset: crate::Asset, disposition: Disposition) -> Response {
+    let mime = mime_guess::from_path(&asset.path).first_or_octet_stream();
+    match disposition {
+        Disposition::AsIs => {
+            let mut builder = Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, mime.as_ref())
+                .header(header::VARY, "Accept-Encoding");
+            if let Some(enc) = asset.encoding.content_encoding() {
+                builder = builder.header(header::CONTENT_ENCODING, enc);
+            }
+            builder.body(Body::from(asset.data.into_owned())).unwrap()
+        }
+        Disposition::Decompress => match asset.decoded() {
             Ok(decoded) => Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, mime.as_ref())
@@ -111,26 +178,7 @@ async fn handler<A: RustEmbed>(
                 .unwrap(),
             Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "decompression failed").into_response(),
         },
-        Encoding::RawAsIs => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, mime.as_ref())
-            .body(Body::from(asset.data.into_owned()))
-            .unwrap(),
     }
-}
-
-fn accepts_gzip(headers: &HeaderMap) -> bool {
-    let Some(value) = headers.get(header::ACCEPT_ENCODING) else {
-        return false;
-    };
-    let Ok(s) = value.to_str() else {
-        return false;
-    };
-    s.split(',').any(|enc| {
-        // Strip optional `;q=...` parameter and surrounding whitespace.
-        let token = enc.split(';').next().unwrap_or("").trim();
-        token.eq_ignore_ascii_case("gzip")
-    })
 }
 
 #[cfg(test)]
@@ -144,59 +192,45 @@ mod tests {
     }
 
     #[test]
-    fn missing_header_is_false() {
-        assert!(!accepts_gzip(&HeaderMap::new()));
+    fn missing_header_accepts_nothing() {
+        let a = parse_accept_encoding(&HeaderMap::new());
+        assert!(!a.gzip && !a.brotli);
     }
 
     #[test]
-    fn empty_header_is_false() {
-        assert!(!accepts_gzip(&h("")));
+    fn plain_gzip() {
+        let a = parse_accept_encoding(&h("gzip"));
+        assert!(a.gzip && !a.brotli);
     }
 
     #[test]
-    fn plain_gzip_is_true() {
-        assert!(accepts_gzip(&h("gzip")));
+    fn plain_brotli() {
+        let a = parse_accept_encoding(&h("br"));
+        assert!(a.brotli && !a.gzip);
+    }
+
+    #[test]
+    fn br_and_gzip() {
+        let a = parse_accept_encoding(&h("br, gzip"));
+        assert!(a.brotli && a.gzip);
     }
 
     #[test]
     fn case_insensitive() {
-        assert!(accepts_gzip(&h("GZIP")));
-        assert!(accepts_gzip(&h("Gzip")));
-    }
-
-    #[test]
-    fn finds_gzip_anywhere_in_list() {
-        assert!(accepts_gzip(&h("gzip, deflate")));
-        assert!(accepts_gzip(&h("deflate, gzip")));
-        assert!(accepts_gzip(&h("br, gzip, deflate")));
+        let a = parse_accept_encoding(&h("GZIP, BR"));
+        assert!(a.gzip && a.brotli);
     }
 
     #[test]
     fn ignores_q_parameter() {
-        assert!(accepts_gzip(&h("gzip;q=0.5")));
-        assert!(accepts_gzip(&h("gzip; q=0.8")));
-        assert!(accepts_gzip(&h("deflate, gzip;q=0.9, br")));
-    }
-
-    #[test]
-    fn surrounding_whitespace_ok() {
-        assert!(accepts_gzip(&h("  gzip  ")));
-        assert!(accepts_gzip(&h(" deflate ,  gzip ")));
-    }
-
-    #[test]
-    fn other_encodings_alone_are_false() {
-        assert!(!accepts_gzip(&h("deflate")));
-        assert!(!accepts_gzip(&h("br")));
-        assert!(!accepts_gzip(&h("identity")));
-        assert!(!accepts_gzip(&h("br, deflate, identity")));
+        let a = parse_accept_encoding(&h("br;q=1.0, gzip;q=0.5"));
+        assert!(a.brotli && a.gzip);
     }
 
     #[test]
     fn substring_match_is_not_enough() {
-        // "x-gzip" and "gzipped" are distinct tokens, not gzip.
-        assert!(!accepts_gzip(&h("x-gzip")));
-        assert!(!accepts_gzip(&h("gzipped")));
+        let a = parse_accept_encoding(&h("x-gzip, brotli"));
+        assert!(!a.gzip && !a.brotli);
     }
 
     fn default_cfg() -> RouterConfig {
@@ -210,51 +244,32 @@ mod tests {
     }
 
     #[test]
-    fn default_has_never_decompress_set() {
-        assert!(default_cfg().never_decompress);
+    fn prefs_prefer_brotli_over_gzip() {
+        let prefs = encoding_prefs(
+            AcceptedEncodings { gzip: true, brotli: true },
+            &default_cfg(),
+        );
+        assert_eq!(prefs, vec![Encoding::Brotli, Encoding::Gzip, Encoding::Identity]);
     }
 
     #[test]
-    fn raw_assets_are_always_sent_as_is() {
-        assert_eq!(
-            pick_encoding(false, true, &default_cfg()),
-            Encoding::RawAsIs
-        );
-        assert_eq!(
-            pick_encoding(false, false, &default_cfg()),
-            Encoding::RawAsIs
-        );
-        assert_eq!(
-            pick_encoding(false, false, &allow_decompress_cfg()),
-            Encoding::RawAsIs
-        );
+    fn default_cfg_picks_gzip_even_without_accept() {
+        let prefs = encoding_prefs(AcceptedEncodings::default(), &default_cfg());
+        assert_eq!(prefs, vec![Encoding::Gzip, Encoding::Identity]);
     }
 
     #[test]
-    fn gzipped_to_gzip_aware_client_is_sent_as_is() {
-        assert_eq!(
-            pick_encoding(true, true, &default_cfg()),
-            Encoding::GzippedAsIs
-        );
+    fn allow_decompress_skips_gzip_when_unaccepted() {
+        let prefs = encoding_prefs(AcceptedEncodings::default(), &allow_decompress_cfg());
+        assert_eq!(prefs, vec![Encoding::Identity]);
     }
 
     #[test]
-    fn default_config_sends_gzip_to_unaware_clients() {
-        // Default is `never_decompress: true` — we don't burn CPU
-        // decompressing for clients that didn't ask for gzip.
-        assert_eq!(
-            pick_encoding(true, false, &default_cfg()),
-            Encoding::GzippedAsIs
+    fn brotli_only_when_client_accepts_br() {
+        let prefs = encoding_prefs(
+            AcceptedEncodings { gzip: true, brotli: false },
+            &default_cfg(),
         );
-    }
-
-    #[test]
-    fn allow_decompress_falls_back_for_unaware_clients() {
-        // Opt-in to the slow path: clients that genuinely can't accept gzip
-        // get freshly decompressed bytes.
-        assert_eq!(
-            pick_encoding(true, false, &allow_decompress_cfg()),
-            Encoding::Decompress
-        );
+        assert!(!prefs.contains(&Encoding::Brotli));
     }
 }

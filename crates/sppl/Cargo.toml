@@ -15,6 +15,7 @@ axum = ["dep:axum", "dep:tower", "dep:http", "dep:bytes"]
 rust-embed = { version = "8", features = ["interpolate-folder-path"] }
 mime_guess = "2"
 flate2 = "1"
+brotli = "7"
 
 axum = { version = "0.7", optional = true, default-features = false }
 tower = { version = "0.5", optional = true }

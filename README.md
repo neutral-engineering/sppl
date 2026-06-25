@@ -15,10 +15,9 @@ asset lookup) that already knows how to:
 - resolve SvelteKit `adapter-static` `<route>.html` files for prerendered
   routes,
 - fall back to `index.html` for client-side SPA routes,
-- store **one gzipped copy** of each compressible asset and serve it as-is
-  with `Content-Encoding: gzip`, regardless of `Accept-Encoding` (modern
-  clients all decompress transparently); flip
-  [`RouterConfig::never_decompress`](crates/sppl/src/axum.rs) to `false`
+- store **pre-compressed copies** of each compressible asset (brotli and/or
+  gzip) and pick the best variant per request based on `Accept-Encoding`;
+  flip [`RouterConfig::never_decompress`](crates/sppl/src/axum.rs) to `false`
   to opt back into on-the-fly decompression for legacy clients,
 - ship as a single self-contained binary — no extra files to deploy.
 
@@ -27,15 +26,27 @@ https://github.com/user-attachments/assets/010351d4-e685-4aa2-9c9e-3d1294adb904
 
 ## Compression
 
-Run [`sppl::build::gzip_assets`](crates/sppl/src/build.rs) from your
-`build.rs` once, after your Svelte build, and `sppl` takes care of the rest
-at request time. Because only the gzipped bytes live in the binary, the
-default request path is zero-CPU: every response is the stored gzipped
-bytes, sent with `Content-Encoding: gzip`. Modern clients (browsers,
-`curl --compressed`, every common HTTP library) decompress transparently;
-the rare client that genuinely can't accept gzip can be served via
-`router_with(RouterConfig { never_decompress: false })`, which restores
-on-the-fly decompression with [`flate2`].
+Run [`sppl::build::compress_assets`](crates/sppl/src/build.rs) from your
+`build.rs` once, after your Svelte build, picking the algorithms you want:
+
+```rust
+// build.rs
+use sppl::build::Algorithm;
+sppl::build::compress_assets("../app/build", &[Algorithm::Brotli, Algorithm::Gzip]).unwrap();
+```
+
+For each compressible file, a `.br` and/or `.gz` sibling is written next to
+the original. At request time `sppl` picks the best variant the client
+accepts: **brotli** (typically 15–25% smaller than gzip) when the client
+advertises `br`, gzip otherwise. By default, even clients that don't
+advertise `gzip` get the gzipped bytes — every modern HTTP library
+decompresses gzip transparently and this keeps per-request CPU at zero.
+Flip [`RouterConfig::never_decompress`](crates/sppl/src/axum.rs) to `false`
+to restore on-the-fly decompression for clients that truly can't accept
+gzip.
+
+`sppl::build::gzip_assets` is still available for backwards compatibility
+and produces only `.gz` (and removes the original).
 
 ## Layout
 
@@ -95,6 +106,26 @@ Set `SPPL_SKIP_SVELTE_BUILD=1` to skip the build-script step (useful in CI
 when the build is produced upstream).
 
 Then open <http://127.0.0.1:3000>.
+
+## Hot-reload during frontend development
+
+Embedding into the binary is for *release*. While iterating on the Svelte
+side, run Vite's dev server directly so you get hot module reload without a
+Rust rebuild:
+
+```bash
+# Frontend with HMR (separate terminal):
+deno task --cwd=examples/app dev
+
+# Rust backend (separate terminal), proxying API to whatever port Vite picks:
+cargo run -p sppl-example-server
+```
+
+Then point your browser at the Vite URL (typically <http://localhost:5173>)
+and have Vite proxy `/api/*` to your Rust server via its
+[`server.proxy`](https://vitejs.dev/config/server-options.html#server-proxy)
+config. Run `sppl::build::compress_assets` (or `gzip_assets`) only when
+producing the final embedded binary.
 
 ## Testing
 

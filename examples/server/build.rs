@@ -40,10 +40,14 @@ fn main() {
         );
     }
 
-    // Pre-gzip compressible assets so the binary stores one compressed copy.
-    // `sppl::resolve` will serve those bytes as-is to clients that accept
-    // gzip and decompress them on the fly otherwise.
-    sppl::build::gzip_assets(&build_dir).expect("gzip_assets failed");
+    // Pre-compress compressible assets so the binary stores brotli + gzip
+    // copies alongside the originals. `sppl::resolve` picks the best variant
+    // the client accepts.
+    sppl::build::compress_assets(
+        &build_dir,
+        &[sppl::build::Algorithm::Brotli, sppl::build::Algorithm::Gzip],
+    )
+    .expect("compress_assets failed");
 }
 
 fn run_deno_build(app_dir: &std::path::Path) {

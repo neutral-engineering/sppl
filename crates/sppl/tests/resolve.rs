@@ -17,7 +17,7 @@ fn root_serves_index_html_via_fallback() {
     let asset = sppl::resolve::<Fixture>("/").expect("root resolves");
     assert_eq!(asset.path, "index.html");
     assert!(
-        asset.gzipped,
+        asset.encoding == sppl::Encoding::Gzip,
         "index.html.gz fixture exists, should be preferred"
     );
     assert_eq!(body(asset).trim(), "INDEX");
@@ -34,7 +34,7 @@ fn exact_path_match_wins() {
     let asset = sppl::resolve::<Fixture>("/assets/main.css").expect("css");
     assert_eq!(asset.path, "assets/main.css");
     assert!(
-        asset.gzipped,
+        asset.encoding == sppl::Encoding::Gzip,
         "main.css.gz fixture exists, should be preferred"
     );
     assert_eq!(body(asset).trim(), "MAIN_CSS");
@@ -44,7 +44,7 @@ fn exact_path_match_wins() {
 fn html_extension_is_tried_for_prerendered_routes() {
     let asset = sppl::resolve::<Fixture>("/about").expect("about");
     assert_eq!(asset.path, "about.html");
-    assert!(!asset.gzipped, "no about.html.gz fixture");
+    assert_eq!(asset.encoding, sppl::Encoding::Identity, "no about.html.gz fixture");
     assert_eq!(body(asset).trim(), "ABOUT");
 }
 
