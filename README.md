@@ -38,12 +38,13 @@ sppl::build::compress_assets("../app/build", &[Algorithm::Brotli, Algorithm::Gzi
 For each compressible file, a `.br` and/or `.gz` sibling is written next to
 the original. At request time `sppl` picks the best variant the client
 accepts: **brotli** (typically 15–25% smaller than gzip) when the client
-advertises `br`, gzip otherwise. By default, even clients that don't
-advertise `gzip` get the gzipped bytes — every modern HTTP library
-decompresses gzip transparently and this keeps per-request CPU at zero.
-Flip [`RouterConfig::never_decompress`](crates/sppl/src/axum.rs) to `false`
-to restore on-the-fly decompression for clients that truly can't accept
-gzip.
+advertises `br`, gzip otherwise. By default
+([`RouterConfig::never_decompress`](crates/sppl/src/axum.rs) = `true`),
+`sppl` will send the pre-compressed bytes even to clients that didn't
+advertise the encoding — this caps per-request CPU at zero and is a cheap
+defense against scripts hammering the server with no `Accept-Encoding`
+header. Flip it to `false` to restore on-the-fly decompression for clients
+that genuinely can't accept either encoding.
 
 `sppl::build::gzip_assets` is still available for backwards compatibility
 and produces only `.gz` (and removes the original).

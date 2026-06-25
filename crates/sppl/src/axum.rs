@@ -13,18 +13,19 @@ use crate::{Encoding, RustEmbed, resolve_with};
 /// Runtime knobs for [`router_with`].
 #[derive(Clone, Debug)]
 pub struct RouterConfig {
-    /// When `true` (the default), never decompress a gzipped asset on the
-    /// fly: clients that don't advertise `Accept-Encoding: gzip` still get
-    /// the gzipped bytes, with `Content-Encoding: gzip` set. Caps CPU cost
-    /// under load. Practically every modern client decompresses gzip
-    /// transparently.
+    /// When `true` (the default), never decompress on the fly: clients that
+    /// don't advertise `Accept-Encoding: gzip` (or `br`) still get the
+    /// pre-compressed bytes with the appropriate `Content-Encoding`. Caps
+    /// per-request CPU cost — important defense against a script hammering
+    /// the server with no `Accept-Encoding` header (a cheap DoS vector if
+    /// the server has to gunzip/de-brotli every response).
+    ///
+    /// Practically every modern client decompresses gzip transparently; if
+    /// only the brotli variant exists, an old client that doesn't accept
+    /// `br` will fail to decode — that's the trade-off you're opting into.
     ///
     /// Set to `false` to restore on-the-fly decompression for clients that
-    /// truly can't accept gzip.
-    ///
-    /// Note: this only applies to gzip. Brotli is **never** sent to clients
-    /// that don't advertise `br` — they get the gzip or identity variant
-    /// instead (and if neither exists, the brotli variant decompressed).
+    /// truly can't accept either encoding.
     pub never_decompress: bool,
 }
 
@@ -102,12 +103,10 @@ fn parse_accept_encoding(headers: &HeaderMap) -> AcceptedEncodings {
 /// succeeds even if only a raw file exists.
 fn encoding_prefs(accepts: AcceptedEncodings, config: &RouterConfig) -> Vec<Encoding> {
     let mut prefs = Vec::with_capacity(3);
-    if accepts.brotli {
+    if accepts.brotli || config.never_decompress {
         prefs.push(Encoding::Brotli);
     }
     if accepts.gzip || config.never_decompress {
-        // never_decompress: pick the gzipped bytes even if the client
-        // didn't ask, because modern clients decompress gzip transparently.
         prefs.push(Encoding::Gzip);
     }
     prefs.push(Encoding::Identity);
@@ -253,23 +252,29 @@ mod tests {
     }
 
     #[test]
-    fn default_cfg_picks_gzip_even_without_accept() {
+    fn default_cfg_offers_all_encodings_even_without_accept() {
+        // never_decompress: send pre-compressed bytes regardless of what
+        // the client asked for — caps CPU under load.
         let prefs = encoding_prefs(AcceptedEncodings::default(), &default_cfg());
-        assert_eq!(prefs, vec![Encoding::Gzip, Encoding::Identity]);
+        assert_eq!(
+            prefs,
+            vec![Encoding::Brotli, Encoding::Gzip, Encoding::Identity]
+        );
     }
 
     #[test]
-    fn allow_decompress_skips_gzip_when_unaccepted() {
+    fn allow_decompress_skips_compressed_when_unaccepted() {
         let prefs = encoding_prefs(AcceptedEncodings::default(), &allow_decompress_cfg());
         assert_eq!(prefs, vec![Encoding::Identity]);
     }
 
     #[test]
-    fn brotli_only_when_client_accepts_br() {
+    fn allow_decompress_skips_brotli_when_client_only_accepts_gzip() {
         let prefs = encoding_prefs(
             AcceptedEncodings { gzip: true, brotli: false },
-            &default_cfg(),
+            &allow_decompress_cfg(),
         );
         assert!(!prefs.contains(&Encoding::Brotli));
+        assert!(prefs.contains(&Encoding::Gzip));
     }
 }
