@@ -7,7 +7,7 @@ license.workspace = true
 
 [dependencies]
 sppl = { path = "../../crates/sppl" }
-axum = "0.7"
+axum = "0.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [build-dependencies]
