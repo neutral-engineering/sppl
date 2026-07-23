@@ -51,7 +51,7 @@ examples/server/     # axum server that embeds the demo
 # Cargo.toml
 [dependencies]
 sppl  = "0.0.4"
-axum  = "0.7"
+axum  = "0.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
